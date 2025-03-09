@@ -10,10 +10,12 @@ with open("config.json") as f:
 CLIENT_ID = config["client_id"]
 CLIENT_SECRET = config["client_secret"]
 TENANT_ID = config["tenant_id"]
+EMAIL = config["email"]  # Load email dynamically
+
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 SCOPE = ["https://graph.microsoft.com/.default"]
 
-# Create MSAL authentication app
+# Create an MSAL authentication app
 app = ConfidentialClientApplication(CLIENT_ID, CLIENT_SECRET, AUTHORITY)
 
 # Try to get a cached token first
@@ -38,10 +40,10 @@ headers = {
 
 # Ask user for folder (or use default Inbox)
 folder_name = input("📂 Enter folder name (default: inbox): ") or "inbox"
-print(f"\n🔍 Fetching emails from '{folder_name}' folder...\n")
+print(f"\n🔍 Fetching emails from '{folder_name}' folder for {EMAIL}...\n")
 
-# Graph API URL for the selected folder
-url = f"https://graph.microsoft.com/v1.0/me/mailFolders/{folder_name}/messages?$top=100"
+# Use EMAIL from config.json in API request
+url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders/{folder_name}/messages?$top=100"
 
 email_data = []
 
