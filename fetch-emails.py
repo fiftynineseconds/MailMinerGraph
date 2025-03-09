@@ -51,9 +51,11 @@ headers = {
 print("📂 Fetching all mail folders, including subfolders...")
 folder_lookup = {}
 parent_folder_lookup = {}
+total_email_estimate = 0  # Store estimated total email count
 
 def fetch_folders(url):
     """Recursively fetch all folders and subfolders"""
+    global total_email_estimate
     while url:
         headers["Authorization"] = f"Bearer {get_access_token()}"
         response = requests.get(url, headers=headers).json()
@@ -62,7 +64,20 @@ def fetch_folders(url):
             folder_lookup[folder["id"]] = folder["displayName"]
             parent_folder_lookup[folder["id"]] = folder.get("parentFolderId")
 
-            # If the folder has subfolders, fetch them recursively
+            # Estimate email count for each folder
+            count_url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders/{folder['id']}/messages/$count"
+            count_headers = {**headers, "ConsistencyLevel": "eventual"}
+            count_response = requests.get(count_url, headers=count_headers)
+
+            if count_response.status_code == 200:
+                folder_email_count = int(count_response.text)
+                total_email_estimate += folder_email_count
+            else:
+                folder_email_count = "Unknown"
+
+            print(f"📂 {folder['displayName']} ({folder['id']}) - Estimated Emails: {folder_email_count}")
+
+            # Recursively fetch subfolders
             subfolder_url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders/{folder['id']}/childFolders"
             fetch_folders(subfolder_url)
 
@@ -70,13 +85,16 @@ def fetch_folders(url):
 
 fetch_folders(f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders?$top=200")
 
-print(f"✅ Retrieved {len(folder_lookup)} folders (including subfolders).\n")
+print(f"\n📊 Estimated Total Emails to Process: {total_email_estimate}\n")
 
-# 🔹 Step 2: Fetch all emails (including subfolders)
-email_data = []
+# 🔹 Step 2: Fetch all emails (WRITE DIRECTLY TO CSV)
+csv_filename = "email_metadata.csv"
+first_write = True  # To track if it's the first write (for headers)
+
+print("📨 Fetching ALL emails from all folders...\n")
 email_count = 0
+start_time = time.time()
 
-print("📨 Fetching ALL emails from all folders and subfolders...\n")
 for folder_id, folder_name in folder_lookup.items():
     print(f"📂 Processing folder: {folder_name} ({folder_id})")
 
@@ -88,14 +106,15 @@ for folder_id, folder_name in folder_lookup.items():
         data = response.json()
 
         if "error" in data:
-            print(f"❌ API Error: {data['error']['message']}")
+            print(f"❌ API Error in {folder_name}: {data['error']['message']}")
             break  
 
+        email_batch = []
         for email in data.get("value", []):
             parent_folder_id = parent_folder_lookup.get(folder_id)
             parent_folder_name = folder_lookup.get(parent_folder_id, "Root Folder" if parent_folder_id is None else "Unknown Parent")
 
-            email_data.append({
+            email_metadata = {
                 "EmailID": email["id"],
                 "InternetMessageID": email.get("internetMessageId", ""),
                 "ConversationID": email.get("conversationId", ""),
@@ -109,18 +128,26 @@ for folder_id, folder_name in folder_lookup.items():
                 "IsRead": email["isRead"],
                 "HasAttachments": email["hasAttachments"],
                 "Categories": ", ".join(email.get("categories", [])),
-            })
+            }
 
+            email_batch.append(email_metadata)
             email_count += 1
+
+            # 🔹 Print progress indicator
             if email_count % 100 == 0:
-                print(f"📊 Processed {email_count} emails...")
+                elapsed_time = time.time() - start_time
+                speed = email_count / elapsed_time  # Emails per second
+                estimated_time_remaining = (total_email_estimate - email_count) / speed if speed > 0 else 0
+
+                progress = (email_count / total_email_estimate) * 100 if total_email_estimate > 0 else 0
+                print(f"📊 Processed {email_count}/{total_email_estimate} emails ({progress:.2f}%) | Speed: {speed:.2f} emails/sec | ETA: {estimated_time_remaining:.2f} sec")
+
+        # Write batch to CSV immediately
+        df = pd.DataFrame(email_batch)
+        df.to_csv(csv_filename, mode='a', index=False, header=first_write)
+        first_write = False  # Ensure header is only written once
 
         url = data.get("@odata.nextLink")  
 
 print(f"\n✅ Finished fetching emails! Total Retrieved: {email_count}\n")
-
-# 🔹 Step 3: Save emails to CSV
-df = pd.DataFrame(email_data)
-csv_filename = "email_metadata.csv"
-df.to_csv(csv_filename, index=False)
 print(f"✅ Email metadata saved to {csv_filename} 🎉")
