@@ -74,8 +74,8 @@ for folder_id, folder_name in folder_lookup.items():
             break  # Skip this folder if there's an error
 
         for email in data.get("value", []):
-            if email_count >= MAX_EMAILS:
-                break  # Stop when we reach the limit
+            #if email_count >= MAX_EMAILS:
+            #    break  # Stop when we reach the limit
 
             parent_folder_id = parent_folder_lookup.get(folder_id)  # Get the parent folder ID
             parent_folder_name = folder_lookup.get(parent_folder_id, "Root Folder" if parent_folder_id is None else "Unknown Parent")
@@ -94,7 +94,7 @@ for folder_id, folder_name in folder_lookup.items():
                 "IsRead": email["isRead"],
                 "HasAttachments": email["hasAttachments"],
                 "Categories": ", ".join(email.get("categories", [])),
-                "Preview": email.get("bodyPreview", "").replace("\n", " ")[:100]  # Limit to 100 chars
+                #"Preview": email.get("bodyPreview", "").replace("\n", " ")[:100]  # Limit to 100 chars
             })
 
             email_count += 1
