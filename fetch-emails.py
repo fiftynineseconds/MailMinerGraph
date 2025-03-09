@@ -16,7 +16,7 @@ EMAIL = config["email"]
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 SCOPE = ["https://graph.microsoft.com/.default"]
 
-# Log file for errors
+# Error log file
 ERROR_LOG_FILE = "errors.log"
 
 # Authenticate with Microsoft Graph API
@@ -50,41 +50,72 @@ headers = {
     "Content-Type": "application/json"
 }
 
-# 🔹 Step 1: Fetch all folders (INCLUDING SUBFOLDERS)
-print("📂 Fetching all mail folders, including subfolders...")
+# 🔹 Rate-Limited Request Handler
+def make_request_with_backoff(url, headers, max_retries=5):
+    """Handles rate limiting with exponential backoff."""
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 429:  # Too Many Requests
+            retry_after = int(response.headers.get("Retry-After", 5))  # Default to 5 sec
+            print(f"⚠️ Rate limit hit! Retrying in {retry_after} sec...")
+            time.sleep(retry_after)  # Wait before retrying
+            retry_count += 1
+        else:
+            return response  # Success!
+
+    log_error("Max retries reached for URL", url)
+    return None
+
+# 🔹 Error Logging
+def log_error(message, detail=""):
+    """Logs errors to a file for later review."""
+    with open(ERROR_LOG_FILE, "a") as error_log:
+        error_log.write(f"{message}: {detail}\n")
+    print(f"⚠️ Logged error: {message}")
+
+# 🔹 Step 1: Fetch all folders and estimate total emails
+print("📂 Fetching all mail folders and estimating total emails...")
 folder_lookup = {}
 parent_folder_lookup = {}
-total_email_estimate = 0  # Store estimated total email count
+total_email_estimate = 0
 
 def fetch_folders(url):
-    """Recursively fetch all folders and subfolders"""
+    """Recursively fetch all folders and estimate total emails"""
     global total_email_estimate
-    while url:
-        headers["Authorization"] = f"Bearer {get_access_token()}"
-        response = requests.get(url, headers=headers).json()
 
-        for folder in response.get("value", []):
+    while url:
+        print(f"🔄 Fetching folder list: {url}")
+
+        headers["Authorization"] = f"Bearer {get_access_token()}"
+        response = make_request_with_backoff(url, headers)
+
+        if response is None:
+            return  
+
+        print(f"✅ Folder list response received")  
+        data = response.json()
+
+        for folder in data.get("value", []):
             folder_lookup[folder["id"]] = folder["displayName"]
             parent_folder_lookup[folder["id"]] = folder.get("parentFolderId")
 
-            # Estimate email count for each folder
             count_url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders/{folder['id']}/messages/$count"
             count_headers = {**headers, "ConsistencyLevel": "eventual"}
-            count_response = requests.get(count_url, headers=count_headers)
+            count_response = make_request_with_backoff(count_url, count_headers)
 
-            if count_response.status_code == 200:
+            if count_response and count_response.status_code == 200:
                 folder_email_count = int(count_response.text)
                 total_email_estimate += folder_email_count
             else:
-                folder_email_count = "Unknown"
+                folder_email_count = ""
+                log_error("Failed to estimate email count", folder["displayName"])
 
-            print(f"📂 {folder['displayName']} ({folder['id']}) - Estimated Emails: {folder_email_count}")
+            print(f"📂 {folder['displayName']} - Estimated Emails: {folder_email_count}")
 
-            # Recursively fetch subfolders
-            subfolder_url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders/{folder['id']}/childFolders"
-            fetch_folders(subfolder_url)
-
-        url = response.get("@odata.nextLink")
+        url = data.get("@odata.nextLink")
 
 fetch_folders(f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders?$top=200")
 
@@ -92,48 +123,52 @@ print(f"\n📊 Estimated Total Emails to Process: {total_email_estimate}\n")
 
 # 🔹 Step 2: Fetch all emails (WRITE DIRECTLY TO CSV)
 csv_filename = "email_metadata.csv"
-first_write = True  # To track if it's the first write (for headers)
-
-print("📨 Fetching ALL emails from all folders...\n")
+first_write = True  
 email_count = 0
 start_time = time.time()
 
-for folder_id, folder_name in folder_lookup.items():
-    print(f"📂 Processing folder: {folder_name} ({folder_id})")
+def fetch_emails_from_folder(folder_id, folder_name):
+    """Fetch all emails from a specific folder, following pagination correctly"""
+    global first_write, email_count  
 
     url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders/{folder_id}/messages?$top=100"
 
     while url:
+        print(f"🔄 Fetching emails from folder: {folder_name}")
+
         headers["Authorization"] = f"Bearer {get_access_token()}"
-        response = requests.get(url, headers=headers)
+        response = make_request_with_backoff(url, headers)
+
+        if response is None:
+            log_error("Skipping folder due to API failures", folder_name)
+            break  
+
+        print(f"✅ Response received for folder {folder_name}")  
         data = response.json()
 
         if "error" in data:
-            print(f"❌ API Error in {folder_name}: {data['error']['message']}")
+            log_error(f"API Error in {folder_name}", data['error']['message'])
             break  
 
         email_batch = []
         for email in data.get("value", []):
             try:
-                parent_folder_id = parent_folder_lookup.get(folder_id)
-                parent_folder_name = folder_lookup.get(parent_folder_id, "Root Folder" if parent_folder_id is None else "Unknown Parent")
-
                 email_metadata = {
-                    "EmailID": email["id"],
+                    "EmailID": email.get("id", ""),
                     "InternetMessageID": email.get("internetMessageId", ""),
                     "ConversationID": email.get("conversationId", ""),
-                    "Subject": email["subject"],
-                    "From": email.get("from", {}).get("emailAddress", {}).get("address", "Unknown"),
-                    "To": "; ".join([
-                        recipient.get("emailAddress", {}).get("address", "Unknown")
-                        for recipient in email.get("toRecipients", [])
-                    ]) or "No Recipient",
-                    "Date": email["receivedDateTime"],
+                    "Subject": email.get("subject", ""),
+                    "From": email.get("from", {}).get("emailAddress", {}).get("address", ""),
+                    "To": "; ".join([recipient.get("emailAddress", {}).get("address", "") for recipient in email.get("toRecipients", [])]),
+                    "Cc": "; ".join([recipient.get("emailAddress", {}).get("address", "") for recipient in email.get("ccRecipients", [])]),
+                    "Bcc": "; ".join([recipient.get("emailAddress", {}).get("address", "") for recipient in email.get("bccRecipients", [])]),
+                    "ReceivedDateTime": email.get("receivedDateTime", ""),
+                    "SentDateTime": email.get("sentDateTime", ""),
                     "FolderName": folder_name,
-                    "ParentFolderName": parent_folder_name,
-                    "Importance": email["importance"],
-                    "IsRead": email["isRead"],
-                    "HasAttachments": email["hasAttachments"],
+                    "ParentFolderName": folder_lookup.get(parent_folder_lookup.get(folder_id, ""), ""),
+                    "Importance": email.get("importance", ""),
+                    "IsRead": email.get("isRead", ""),
+                    "HasAttachments": email.get("hasAttachments", ""),
                     "Categories": ", ".join(email.get("categories", [])),
                 }
 
@@ -141,33 +176,20 @@ for folder_id, folder_name in folder_lookup.items():
                 email_count += 1
 
             except Exception as e:
-                # Log the error with email ID and folder name
-                with open(ERROR_LOG_FILE, "a") as error_log:
-                    error_log.write(f"❌ Error processing email in {folder_name} (ID: {email.get('id', 'Unknown')}): {str(e)}\n")
-                print(f"⚠️ Skipping problematic email in {folder_name}: {str(e)}")
+                log_error(f"Skipping problematic email in {folder_name}", str(e))
 
-            # 🔹 Print progress indicator
-            if email_count % 100 == 0:
-                elapsed_time = time.time() - start_time
-                speed = email_count / elapsed_time if elapsed_time > 0 else 0
-                estimated_seconds_remaining = (total_email_estimate - email_count) / speed if speed > 0 else 0
-
-                # Convert seconds to hh:mm:ss
-                hours = int(estimated_seconds_remaining // 3600)
-                minutes = int((estimated_seconds_remaining % 3600) // 60)
-                seconds = int(estimated_seconds_remaining % 60)
-                eta_formatted = f"{hours}h {minutes}m {seconds}s" if hours > 0 else f"{minutes}m {seconds}s"
-
-                progress = (email_count / total_email_estimate) * 100 if total_email_estimate > 0 else 0
-                print(f"📊 Processed {email_count}/{total_email_estimate} emails ({progress:.2f}%) | Speed: {speed:.2f} emails/sec | ETA: {eta_formatted}")
-
-        # Write batch to CSV immediately
         df = pd.DataFrame(email_batch)
         df.to_csv(csv_filename, mode='a', index=False, header=first_write)
-        first_write = False  # Ensure header is only written once
+        first_write = False  
 
-        url = data.get("@odata.nextLink")  
+        url = data.get("@odata.nextLink")
+        print(f"➡️ Next page URL: {url if url else 'No more pages'}")  
+
+# Process all folders
+for folder_id, folder_name in folder_lookup.items():
+    print(f"📂 Starting folder: {folder_name} ({folder_id})")
+    fetch_emails_from_folder(folder_id, folder_name)
 
 print(f"\n✅ Finished fetching emails! Total Retrieved: {email_count}\n")
 print(f"✅ Email metadata saved to {csv_filename} 🎉")
-print(f"⚠️ Check {ERROR_LOG_FILE} for any skipped emails due to errors.")
+print(f"⚠️ Errors logged in {ERROR_LOG_FILE}, check for skipped emails.")
