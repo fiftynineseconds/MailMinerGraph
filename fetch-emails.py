@@ -198,6 +198,13 @@ def fetch_emails_from_folder(folder_id, folder_name):
 
         url = data.get("@odata.nextLink")
 
+# 🔹 Step 3: Process Emails in Each Folder
+print("\n📨 Fetching ALL emails from all folders...\n")
+
+for folder_id, folder_name in folder_lookup.items():
+    print(f"📂 Processing folder: {folder_name} ({folder_id})")
+    fetch_emails_from_folder(folder_id, folder_name)
+
 print(f"\n✅ Finished fetching emails! Total Retrieved: {email_count}\n")
 print(f"✅ Email metadata saved to {csv_filename} 🎉")
 print(f"⚠️ Errors logged in {ERROR_LOG_FILE}, check for skipped emails.")
