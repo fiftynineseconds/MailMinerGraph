@@ -43,6 +43,12 @@ MailMinerGraph extracts **email metadata** from a **Microsoft 365 mailbox** usin
    ```
    If the output shows OpenSSL **1.1.1+ or 3.x**, you’re all set!
 
+   Install of installing OpenSSL you could also simply downgrade the version of **urllib**. Probably only do this if you're in a virtual environment.
+
+   ```sh
+   pip install "urllib3<2"
+   ```
+
 ## 🔑 Setup & Authentication
 
 1. **Register an Azure AD App**
