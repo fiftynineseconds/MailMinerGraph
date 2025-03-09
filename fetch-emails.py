@@ -175,6 +175,20 @@ def fetch_emails_from_folder(folder_id, folder_name):
                 email_batch.append(email_metadata)
                 email_count += 1
 
+                # 🔹 Progress & ETA Calculation
+                if email_count % 100 == 0:
+                    elapsed_time = time.time() - start_time
+                    speed = email_count / elapsed_time if elapsed_time > 0 else 0
+                    remaining = total_email_estimate - email_count
+                    estimated_seconds_remaining = remaining / speed if speed > 0 else 0
+
+                    hours = int(estimated_seconds_remaining // 3600)
+                    minutes = int((estimated_seconds_remaining % 3600) // 60)
+                    seconds = int(estimated_seconds_remaining % 60)
+                    eta_formatted = f"{hours}h {minutes}m {seconds}s" if hours > 0 else f"{minutes}m {seconds}s"
+
+                    print(f"📊 Processed {email_count}/{total_email_estimate} emails ({(email_count/total_email_estimate)*100:.2f}%) | Speed: {speed:.2f} emails/sec | ETA: {eta_formatted}")
+
             except Exception as e:
                 log_error(f"Skipping problematic email in {folder_name}", str(e))
 
@@ -183,12 +197,6 @@ def fetch_emails_from_folder(folder_id, folder_name):
         first_write = False  
 
         url = data.get("@odata.nextLink")
-        print(f"➡️ Next page URL: {url if url else 'No more pages'}")  
-
-# Process all folders
-for folder_id, folder_name in folder_lookup.items():
-    print(f"📂 Starting folder: {folder_name} ({folder_id})")
-    fetch_emails_from_folder(folder_id, folder_name)
 
 print(f"\n✅ Finished fetching emails! Total Retrieved: {email_count}\n")
 print(f"✅ Email metadata saved to {csv_filename} 🎉")
