@@ -1,6 +1,7 @@
 import json
 import requests
 import pandas as pd
+import time
 from msal import ConfidentialClientApplication
 
 # Load credentials from config.json
@@ -17,72 +18,78 @@ SCOPE = ["https://graph.microsoft.com/.default"]
 
 # Authenticate with Microsoft Graph API
 app = ConfidentialClientApplication(CLIENT_ID, CLIENT_SECRET, AUTHORITY)
-token_response = app.acquire_token_silent(SCOPE, account=None)
+access_token = None
+token_expiration = 0  
 
-if not token_response:
-    token_response = app.acquire_token_for_client(SCOPE)
+def get_access_token():
+    """Gets a new access token and refreshes it if expired"""
+    global access_token, token_expiration
 
-if "access_token" in token_response:
-    access_token = token_response["access_token"]
-    print("✅ Access token obtained successfully!\n")
-else:
-    print("❌ Failed to obtain access token:", token_response.get("error_description", token_response))
-    exit()
+    if access_token and time.time() < token_expiration - 60:
+        return access_token
+
+    print("🔄 Refreshing access token...")
+
+    token_response = app.acquire_token_silent(SCOPE, account=None)
+    if not token_response:
+        token_response = app.acquire_token_for_client(SCOPE)
+
+    if "access_token" in token_response:
+        access_token = token_response["access_token"]
+        token_expiration = time.time() + 3600  
+        return access_token
+    else:
+        print("❌ Failed to refresh access token:", token_response.get("error_description", token_response))
+        exit()
 
 headers = {
-    "Authorization": f"Bearer {access_token}",
+    "Authorization": f"Bearer {get_access_token()}",
     "Content-Type": "application/json"
 }
 
-# 🔹 Step 1: Fetch all mail folders
-print("📂 Fetching all mail folders...")
+# 🔹 Step 1: Fetch all folders (INCLUDING SUBFOLDERS)
+print("📂 Fetching all mail folders, including subfolders...")
 folder_lookup = {}
 parent_folder_lookup = {}
-total_emails_estimated = 0  # Store the estimated total email count
 
-folder_url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders?$top=200"
-while folder_url:
-    folder_response = requests.get(folder_url, headers=headers).json()
+def fetch_folders(url):
+    """Recursively fetch all folders and subfolders"""
+    while url:
+        headers["Authorization"] = f"Bearer {get_access_token()}"
+        response = requests.get(url, headers=headers).json()
 
-    for folder in folder_response.get("value", []):
-        folder_id = folder["id"]
-        folder_lookup[folder_id] = folder["displayName"]
-        parent_folder_lookup[folder_id] = folder.get("parentFolderId")
+        for folder in response.get("value", []):
+            folder_lookup[folder["id"]] = folder["displayName"]
+            parent_folder_lookup[folder["id"]] = folder.get("parentFolderId")
 
-        # 🔹 Get estimated email count for each folder
-        count_url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders/{folder_id}/messages/$count"
-        count_headers = {**headers, "ConsistencyLevel": "eventual"}
-        count_response = requests.get(count_url, headers=count_headers)
+            # If the folder has subfolders, fetch them recursively
+            subfolder_url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders/{folder['id']}/childFolders"
+            fetch_folders(subfolder_url)
 
-        if count_response.status_code == 200:
-            folder_email_count = int(count_response.text)
-            total_emails_estimated += folder_email_count
-        else:
-            folder_email_count = "Unknown"
+        url = response.get("@odata.nextLink")
 
-        print(f"📂 {folder['displayName']} ({folder_id}) - Estimated Emails: {folder_email_count}")
+fetch_folders(f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders?$top=200")
 
-    folder_url = folder_response.get("@odata.nextLink")
+print(f"✅ Retrieved {len(folder_lookup)} folders (including subfolders).\n")
 
-print(f"\n📊 Estimated Total Emails to Process: {total_emails_estimated}\n")
-print("📨 Fetching ALL emails from all folders...\n")
-
-# 🔹 Step 2: Fetch all emails (with real-time progress)
+# 🔹 Step 2: Fetch all emails (including subfolders)
 email_data = []
 email_count = 0
 
+print("📨 Fetching ALL emails from all folders and subfolders...\n")
 for folder_id, folder_name in folder_lookup.items():
     print(f"📂 Processing folder: {folder_name} ({folder_id})")
 
     url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders/{folder_id}/messages?$top=100"
 
     while url:
+        headers["Authorization"] = f"Bearer {get_access_token()}"
         response = requests.get(url, headers=headers)
         data = response.json()
 
         if "error" in data:
             print(f"❌ API Error: {data['error']['message']}")
-            break
+            break  
 
         for email in data.get("value", []):
             parent_folder_id = parent_folder_lookup.get(folder_id)
@@ -105,12 +112,10 @@ for folder_id, folder_name in folder_lookup.items():
             })
 
             email_count += 1
-
-            # 🔹 Print progress every 100 emails
             if email_count % 100 == 0:
                 print(f"📊 Processed {email_count} emails...")
 
-        url = data.get("@odata.nextLink")  # Handle pagination
+        url = data.get("@odata.nextLink")  
 
 print(f"\n✅ Finished fetching emails! Total Retrieved: {email_count}\n")
 
