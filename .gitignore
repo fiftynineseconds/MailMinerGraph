@@ -1,6 +1,12 @@
 # ignore config.json
 config.json
 
+# ignore mac stuff:
+.DS_Store
+
+# don't check-in the csv we generate:
+*.csv
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

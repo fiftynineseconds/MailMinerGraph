@@ -22,6 +22,27 @@ MailMinerGraph extracts **email metadata** from a **Microsoft 365 mailbox** usin
    pip install -r requirements.txt
    ```
 
+4. **Ensure OpenSSL Compatibility (macOS Users)**
+   If you see a warning about `LibreSSL` when running the script, install OpenSSL to avoid potential SSL/TLS issues:
+   ```sh
+   brew install openssl
+   ```
+   Then, ensure your virtual environment uses the correct OpenSSL version:
+   ```sh
+   export LDFLAGS="-L$(brew --prefix openssl)/lib"
+   export CPPFLAGS="-I$(brew --prefix openssl)/include"
+   export PKG_CONFIG_PATH="$(brew --prefix openssl)/lib/pkgconfig"
+   python -m venv .venv --clear
+   source .venv/bin/activate
+   pip install -U pip setuptools wheel
+   pip install -r requirements.txt
+   ```
+   To verify the correct OpenSSL version:
+   ```sh
+   python -c "import ssl; print(ssl.OPENSSL_VERSION)"
+   ```
+   If the output shows OpenSSL **1.1.1+ or 3.x**, you’re all set!
+
 ## 🔑 Setup & Authentication
 
 1. **Register an Azure AD App**
