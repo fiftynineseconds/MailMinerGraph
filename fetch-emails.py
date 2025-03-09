@@ -16,6 +16,9 @@ EMAIL = config["email"]
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
 SCOPE = ["https://graph.microsoft.com/.default"]
 
+# Log file for errors
+ERROR_LOG_FILE = "errors.log"
+
 # Authenticate with Microsoft Graph API
 app = ConfidentialClientApplication(CLIENT_ID, CLIENT_SECRET, AUTHORITY)
 access_token = None
@@ -111,36 +114,52 @@ for folder_id, folder_name in folder_lookup.items():
 
         email_batch = []
         for email in data.get("value", []):
-            parent_folder_id = parent_folder_lookup.get(folder_id)
-            parent_folder_name = folder_lookup.get(parent_folder_id, "Root Folder" if parent_folder_id is None else "Unknown Parent")
+            try:
+                parent_folder_id = parent_folder_lookup.get(folder_id)
+                parent_folder_name = folder_lookup.get(parent_folder_id, "Root Folder" if parent_folder_id is None else "Unknown Parent")
 
-            email_metadata = {
-                "EmailID": email["id"],
-                "InternetMessageID": email.get("internetMessageId", ""),
-                "ConversationID": email.get("conversationId", ""),
-                "Subject": email["subject"],
-                "From": email.get("from", {}).get("emailAddress", {}).get("address", ""),
-                "To": "; ".join([recipient["emailAddress"]["address"] for recipient in email.get("toRecipients", [])]),
-                "Date": email["receivedDateTime"],
-                "FolderName": folder_name,
-                "ParentFolderName": parent_folder_name,
-                "Importance": email["importance"],
-                "IsRead": email["isRead"],
-                "HasAttachments": email["hasAttachments"],
-                "Categories": ", ".join(email.get("categories", [])),
-            }
+                email_metadata = {
+                    "EmailID": email["id"],
+                    "InternetMessageID": email.get("internetMessageId", ""),
+                    "ConversationID": email.get("conversationId", ""),
+                    "Subject": email["subject"],
+                    "From": email.get("from", {}).get("emailAddress", {}).get("address", "Unknown"),
+                    "To": "; ".join([
+                        recipient.get("emailAddress", {}).get("address", "Unknown")
+                        for recipient in email.get("toRecipients", [])
+                    ]) or "No Recipient",
+                    "Date": email["receivedDateTime"],
+                    "FolderName": folder_name,
+                    "ParentFolderName": parent_folder_name,
+                    "Importance": email["importance"],
+                    "IsRead": email["isRead"],
+                    "HasAttachments": email["hasAttachments"],
+                    "Categories": ", ".join(email.get("categories", [])),
+                }
 
-            email_batch.append(email_metadata)
-            email_count += 1
+                email_batch.append(email_metadata)
+                email_count += 1
+
+            except Exception as e:
+                # Log the error with email ID and folder name
+                with open(ERROR_LOG_FILE, "a") as error_log:
+                    error_log.write(f"❌ Error processing email in {folder_name} (ID: {email.get('id', 'Unknown')}): {str(e)}\n")
+                print(f"⚠️ Skipping problematic email in {folder_name}: {str(e)}")
 
             # 🔹 Print progress indicator
             if email_count % 100 == 0:
                 elapsed_time = time.time() - start_time
-                speed = email_count / elapsed_time  # Emails per second
-                estimated_time_remaining = (total_email_estimate - email_count) / speed if speed > 0 else 0
+                speed = email_count / elapsed_time if elapsed_time > 0 else 0
+                estimated_seconds_remaining = (total_email_estimate - email_count) / speed if speed > 0 else 0
+
+                # Convert seconds to hh:mm:ss
+                hours = int(estimated_seconds_remaining // 3600)
+                minutes = int((estimated_seconds_remaining % 3600) // 60)
+                seconds = int(estimated_seconds_remaining % 60)
+                eta_formatted = f"{hours}h {minutes}m {seconds}s" if hours > 0 else f"{minutes}m {seconds}s"
 
                 progress = (email_count / total_email_estimate) * 100 if total_email_estimate > 0 else 0
-                print(f"📊 Processed {email_count}/{total_email_estimate} emails ({progress:.2f}%) | Speed: {speed:.2f} emails/sec | ETA: {estimated_time_remaining:.2f} sec")
+                print(f"📊 Processed {email_count}/{total_email_estimate} emails ({progress:.2f}%) | Speed: {speed:.2f} emails/sec | ETA: {eta_formatted}")
 
         # Write batch to CSV immediately
         df = pd.DataFrame(email_batch)
@@ -151,3 +170,4 @@ for folder_id, folder_name in folder_lookup.items():
 
 print(f"\n✅ Finished fetching emails! Total Retrieved: {email_count}\n")
 print(f"✅ Email metadata saved to {csv_filename} 🎉")
+print(f"⚠️ Check {ERROR_LOG_FILE} for any skipped emails due to errors.")
