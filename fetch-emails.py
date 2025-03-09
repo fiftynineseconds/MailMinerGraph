@@ -34,12 +34,12 @@ headers = {
     "Content-Type": "application/json"
 }
 
-# 🔹 Fetch all mail folders for lookup
-print("📂 Fetching mail folders...")
+# 🔹 Step 1: Fetch all mail folders
+print("📂 Fetching all mail folders...")
 folder_lookup = {}
 parent_folder_lookup = {}
 
-folder_url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders?$top=100"
+folder_url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders?$top=200"
 while folder_url:
     folder_response = requests.get(folder_url, headers=headers).json()
     
@@ -51,48 +51,59 @@ while folder_url:
 
 print(f"✅ Retrieved {len(folder_lookup)} folders.\n")
 
-# 🔹 Ask user for folder name (default: Inbox)
-folder_name = input("📂 Enter folder name (default: inbox): ") or "inbox"
-print(f"\n🔍 Fetching emails from '{folder_name}' folder for {EMAIL}...\n")
-
-# Fetch emails
-url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders/{folder_name}/messages?$top=100"
+# 🔹 Step 2: Fetch emails from all folders (limit: 1000 emails)
+MAX_EMAILS = 1000  # Limit total emails fetched
 email_data = []
+email_count = 0
 
-while url:
-    response = requests.get(url, headers=headers)
-    data = response.json()
+print("📨 Fetching emails from all folders...\n")
+for folder_id, folder_name in folder_lookup.items():
+    if email_count >= MAX_EMAILS:
+        break  # Stop when we reach the limit
 
-    if "error" in data:
-        print(f"❌ API Error: {data['error']['message']}")
-        exit()
+    print(f"📂 Processing folder: {folder_name} ({folder_id})")
 
-    for email in data.get("value", []):
-        folder_id = email.get("parentFolderId", "")
-        folder_name = folder_lookup.get(folder_id, "Unknown Folder")
-        parent_folder_name = folder_lookup.get(parent_folder_lookup.get(folder_id, ""), "Unknown Parent")
+    url = f"https://graph.microsoft.com/v1.0/users/{EMAIL}/mailFolders/{folder_id}/messages?$top=100"
 
-        email_data.append({
-            "EmailID": email["id"],
-            "InternetMessageID": email.get("internetMessageId", ""),
-            "ConversationID": email.get("conversationId", ""),
-            "Subject": email["subject"],
-            "From": email.get("from", {}).get("emailAddress", {}).get("address", ""),
-            "To": "; ".join([recipient["emailAddress"]["address"] for recipient in email.get("toRecipients", [])]),
-            "Date": email["receivedDateTime"],
-            "FolderName": folder_name,
-            "ParentFolderName": parent_folder_name,
-            "Importance": email["importance"],
-            "IsRead": email["isRead"],
-            "HasAttachments": email["hasAttachments"],
-            "Categories": ", ".join(email.get("categories", [])),
-            "Preview": email.get("bodyPreview", "").replace("\n", " ")[:100]  # Limit to 100 chars
-        })
+    while url and email_count < MAX_EMAILS:
+        response = requests.get(url, headers=headers)
+        data = response.json()
 
-    url = data.get("@odata.nextLink")
+        if "error" in data:
+            print(f"❌ API Error: {data['error']['message']}")
+            break  # Skip this folder if there's an error
 
-# Save emails to CSV
+        for email in data.get("value", []):
+            if email_count >= MAX_EMAILS:
+                break  # Stop when we reach the limit
+
+            parent_folder_name = folder_lookup.get(parent_folder_lookup.get(folder_id, ""), "Unknown Parent")
+
+            email_data.append({
+                "EmailID": email["id"],
+                "InternetMessageID": email.get("internetMessageId", ""),
+                "ConversationID": email.get("conversationId", ""),
+                "Subject": email["subject"],
+                "From": email.get("from", {}).get("emailAddress", {}).get("address", ""),
+                "To": "; ".join([recipient["emailAddress"]["address"] for recipient in email.get("toRecipients", [])]),
+                "Date": email["receivedDateTime"],
+                "FolderName": folder_name,
+                "ParentFolderName": parent_folder_name,
+                "Importance": email["importance"],
+                "IsRead": email["isRead"],
+                "HasAttachments": email["hasAttachments"],
+                "Categories": ", ".join(email.get("categories", [])),
+                "Preview": email.get("bodyPreview", "").replace("\n", " ")[:100]  # Limit to 100 chars
+            })
+
+            email_count += 1
+
+        url = data.get("@odata.nextLink")  # Handle pagination
+
+print(f"\n✅ Retrieved {email_count} emails.\n")
+
+# 🔹 Step 3: Save emails to CSV
 df = pd.DataFrame(email_data)
 csv_filename = "email_metadata.csv"
 df.to_csv(csv_filename, index=False)
-print(f"\n✅ Email metadata saved to {csv_filename} 🎉")
+print(f"✅ Email metadata saved to {csv_filename} 🎉")
