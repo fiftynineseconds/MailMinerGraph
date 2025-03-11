@@ -1,5 +1,8 @@
 # MailMinerGraph
 
+> [!IMPORTANT] 
+> This repository, including this README, was entirely AI generated.
+
 MailMinerGraph extracts **email metadata** from a **Microsoft 365 mailbox** using the **Microsoft Graph API**. It collects details like **senders, recipients, dates, folders, and more**, exporting them to a **CSV file** for further analysis.
 
 ## 🚀 Installation
